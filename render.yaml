@@ -1,0 +1,7 @@
+services:
+  - type: web
+    name: fiscmant
+    env: docker
+    plan: free
+    healthCheckPath: /
+    dockerfilePath: ./Dockerfile
