@@ -29,7 +29,8 @@ MODELS_CONFIG = {
     "ventilador_3": {"drive_id": "1DdvtuRwS9XxveUTpNGzHTli-gwaBNLir", "path": "models/ventilador_3.pt", "conf": 0.10},
     "ventilador_4": {"drive_id": "12abF8szsggtzws4JBAqiB8ZnLWTTaaS6", "path": "models/ventilador_4.pt", "conf": 0.10},
     "ups":          {"drive_id": "12SHFp3842S5dfpuma7sGUzb9XFA4wVHI", "path": "models/ups.pt",          "conf": 0.10},
-    "bateria":      {"drive_id": "1qVAzSbjMsYGj2mMRfi41jWB0hW1r8ItU", "path": "models/bateria.pt",      "conf": 0.10},
+    "bateria":          {"drive_id": "1qVAzSbjMsYGj2mMRfi41jWB0hW1r8ItU", "path": "models/bateria.pt",          "conf": 0.10},
+    "breaker_supresor": {"drive_id": "1sh-LQ6s8JPzbWU2uYfxEiFTCbZyB9kCZ",  "path": "models/breaker_supresor.pt",  "conf": 0.10},
 }
 
 _models: dict = {}
@@ -115,6 +116,7 @@ def health(request: Request):
             "POST /ventiladores/detectar",
             "POST /ups/detectar",
             "POST /bateria/detectar",
+            "POST /breaker-supresor/detectar",
         ],
         "modelos_cargados": list(_models.keys())
     })
@@ -340,4 +342,46 @@ async def detectar_bateria(req: DetectarRequest):
         "motivo":           f"Bateria detectada: {', '.join(clases)}" if aprobada else "No se detecto la bateria.",
         "confianza_minima": req.confianza,
         "detecciones":      det
+    })
+
+
+# ── Breaker y Supresor de Transientes ────────────────────────────────────────
+
+ETIQUETAS_VALIDAS_BREAKER = {"fase", "neutro", "puente"}
+
+@app.post("/breaker-supresor/detectar")
+async def detectar_breaker_supresor(req: DetectarRequest):
+    model       = get_model("breaker_supresor")
+    image       = decode_image(req.image_base64)
+    det, clases = run_detection(model, image, req.confianza)
+
+    breaker_dets      = [d for d in det if "breaker"  in d["clase"].lower()]
+    supresor_dets     = [d for d in det if "supresor" in d["clase"].lower()]
+    cable_et_dets     = [d for d in det if "cable"    in d["clase"].lower() or "etiqueta" in d["clase"].lower()]
+
+    breaker_valido        = len(breaker_dets)  > 0
+    supresor_valido       = len(supresor_dets) > 0
+    cable_etiqueta_valido = len(cable_et_dets) > 0
+
+    aprobada = breaker_valido and supresor_valido and cable_etiqueta_valido
+
+    motivos = []
+    if not breaker_valido:        motivos.append("No se detecto el Breaker")
+    if not supresor_valido:       motivos.append("No se detecto el Supresor de transientes")
+    if not cable_etiqueta_valido: motivos.append("No se detectaron cables con etiqueta")
+
+    return JSONResponse({
+        "aprobada":               aprobada,
+        "breaker_valido":         breaker_valido,
+        "supresor_valido":        supresor_valido,
+        "cable_etiqueta_valido":  cable_etiqueta_valido,
+        "total":                  len(det),
+        "clases":                 clases,
+        "motivo":                 "Breaker, Supresor y cables con etiqueta detectados" if aprobada else " | ".join(motivos),
+        "confianza_minima":       req.confianza,
+        "detecciones":            det,
+        "detecciones_breaker":    breaker_dets,
+        "detecciones_supresor":   supresor_dets,
+        "detecciones_cable_et":   cable_et_dets,
+        "etiquetas_validas":      list(ETIQUETAS_VALIDAS_BREAKER),
     })
