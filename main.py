@@ -19,19 +19,19 @@ os.makedirs("models", exist_ok=True)
 
 # ── Configuracion de modelos ──────────────────────────────────────────────────
 MODELS_CONFIG = {
-    "safe_city":    {"drive_id": "1zWqG-Ydo8n37PWxePVESvuHxO5pUyxuk", "path": "models/safe_city.pt",    "conf": 0.10},
-    "fo_nodo":      {"drive_id": "1tSSKvZesgWzhhX8vKBnk-7UoxkRTgKXI", "path": "models/fo_nodo.pt",      "conf": 0.10},
-    "manguera":     {"drive_id": "1M6GnsAqOma8JzK5KkhhYugT_lXPsdc7M", "path": "models/manguera.pt",     "conf": 0.10},
-    "cable":        {"drive_id": "12Gl0x6Y1DTlW7bge_nsJzTBBju-DF1un", "path": "models/cable.pt",        "conf": 0.10},
-    "roseta":       {"drive_id": "1j6xOY3fb-1osgDkVia_yeqqlmXnxr11B", "path": "models/roseta.pt",       "conf": 0.10},
-    "ventilador_1": {"drive_id": "1K5_IouYuaNGDKgv2Y7qSzzmCWBIIjcXk", "path": "models/ventilador_1.pt", "conf": 0.10},
-    "ventilador_2": {"drive_id": "1ZUVqQ6_wqhuD02V-03XxaNDfXCEG9c1c", "path": "models/ventilador_2.pt", "conf": 0.10},
-    "ventilador_3": {"drive_id": "1DdvtuRwS9XxveUTpNGzHTli-gwaBNLir", "path": "models/ventilador_3.pt", "conf": 0.10},
-    "ventilador_4": {"drive_id": "12abF8szsggtzws4JBAqiB8ZnLWTTaaS6", "path": "models/ventilador_4.pt", "conf": 0.10},
-    "ups":          {"drive_id": "12SHFp3842S5dfpuma7sGUzb9XFA4wVHI", "path": "models/ups.pt",          "conf": 0.10},
-    "bateria":          {"drive_id": "1qVAzSbjMsYGj2mMRfi41jWB0hW1r8ItU", "path": "models/bateria.pt",          "conf": 0.10},
-    "breaker_supresor": {"drive_id": "1sh-LQ6s8JPzbWU2uYfxEiFTCbZyB9kCZ",  "path": "models/breaker_supresor.pt",  "conf": 0.10},
-    "ont":              {"drive_id": "1nZ_S9Q_N667gKbFybUfIUDX38ffvD3pe",    "path": "models/ont.pt",               "conf": 0.10},
+    "safe_city":    {"drive_id": "1zWqG-Ydo8n37PWxePVESvuHxO5pUyxuk", "path": "models/safe_city.pt",    "conf": 0.20},
+    "fo_nodo":      {"drive_id": "1tSSKvZesgWzhhX8vKBnk-7UoxkRTgKXI", "path": "models/fo_nodo.pt",      "conf": 0.20},
+    "manguera":     {"drive_id": "1M6GnsAqOma8JzK5KkhhYugT_lXPsdc7M", "path": "models/manguera.pt",     "conf": 0.20},
+    "cable":        {"drive_id": "12Gl0x6Y1DTlW7bge_nsJzTBBju-DF1un", "path": "models/cable.pt",        "conf": 0.20},
+    "roseta":       {"drive_id": "1j6xOY3fb-1osgDkVia_yeqqlmXnxr11B", "path": "models/roseta.pt",       "conf": 0.20},
+    "ventilador_1": {"drive_id": "1K5_IouYuaNGDKgv2Y7qSzzmCWBIIjcXk", "path": "models/ventilador_1.pt", "conf": 0.20},
+    "ventilador_2": {"drive_id": "1ZUVqQ6_wqhuD02V-03XxaNDfXCEG9c1c", "path": "models/ventilador_2.pt", "conf": 0.20},
+    "ventilador_3": {"drive_id": "1DdvtuRwS9XxveUTpNGzHTli-gwaBNLir", "path": "models/ventilador_3.pt", "conf": 0.20},
+    "ventilador_4": {"drive_id": "12abF8szsggtzws4JBAqiB8ZnLWTTaaS6", "path": "models/ventilador_4.pt", "conf": 0.20},
+    "ups":          {"drive_id": "12SHFp3842S5dfpuma7sGUzb9XFA4wVHI", "path": "models/ups.pt",          "conf": 0.20},
+    "bateria":          {"drive_id": "1qVAzSbjMsYGj2mMRfi41jWB0hW1r8ItU", "path": "models/bateria.pt",          "conf": 0.20},
+    "breaker_supresor": {"drive_id": "1sh-LQ6s8JPzbWU2uYfxEiFTCbZyB9kCZ",  "path": "models/breaker_supresor.pt",  "conf": 0.20},
+    "ont":              {"drive_id": "1nZ_S9Q_N667gKbFybUfIUDX38ffvD3pe",    "path": "models/ont.pt",               "conf": 0.20},
 }
 
 _models: dict = {}
@@ -95,12 +95,12 @@ def run_detection(model: YOLO, image: Image.Image, conf_threshold: float):
 
 class DetectarRequest(BaseModel):
     image_base64: str
-    confianza:    float = 0.25
+    confianza:    float = 0.20
 
 class VentiladorRequest(BaseModel):
     image_base64:  str
     ventilador_id: int   = 1
-    confianza:     float = 0.25
+    confianza:     float = 0.20
 
 
 # ── Health ────────────────────────────────────────────────────────────────────
