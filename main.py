@@ -31,10 +31,15 @@ MODELS_CONFIG = {
     "ups":          {"drive_id": "12SHFp3842S5dfpuma7sGUzb9XFA4wVHI", "path": "models/ups.pt",          "conf": 0.10},
     "bateria":          {"drive_id": "1qVAzSbjMsYGj2mMRfi41jWB0hW1r8ItU", "path": "models/bateria.pt",          "conf": 0.10},
     "breaker_supresor": {"drive_id": "1sh-LQ6s8JPzbWU2uYfxEiFTCbZyB9kCZ",  "path": "models/breaker_supresor.pt",  "conf": 0.10},
+    "ont":              {"drive_id": "1nZ_S9Q_N667gKbFybUfIUDX38ffvD3pe",    "path": "models/ont.pt",               "conf": 0.10},
 }
 
 _models: dict = {}
 _locks        = {key: threading.Lock() for key in MODELS_CONFIG}
+
+def _model_ready(name: str) -> bool:
+    """Retorna True si el modelo tiene drive_id real (no PENDING). La descarga es lazy via get_model()."""
+    return MODELS_CONFIG.get(name, {}).get("drive_id", "PENDING_TRAINING") != "PENDING_TRAINING"
 
 
 def get_model(name: str) -> YOLO:
@@ -117,6 +122,7 @@ def health(request: Request):
             "POST /ups/detectar",
             "POST /bateria/detectar",
             "POST /breaker-supresor/detectar",
+            "POST /ont/detectar",
         ],
         "modelos_cargados": list(_models.keys())
     })
@@ -384,4 +390,38 @@ async def detectar_breaker_supresor(req: DetectarRequest):
         "detecciones_supresor":   supresor_dets,
         "detecciones_cable_et":   cable_et_dets,
         "etiquetas_validas":      list(ETIQUETAS_VALIDAS_BREAKER),
+    })
+
+
+# ── ONT (Optical Network Terminal) ───────────────────────────────────────────
+# Clases entrenadas: ont
+# Validacion de etiquetas (ONT / Login / Serie) delegada a Elio Vision.
+# Mientras drive_id sea PENDING_TRAINING el endpoint retorna aprobada=True
+# para pasar directamente a Elio sin bloquear el flujo.
+
+@app.post("/ont/detectar")
+async def detectar_ont(req: DetectarRequest):
+    if not _model_ready("ont"):
+        return JSONResponse({
+            "aprobada":      True,
+            "total":         0,
+            "clases":        [],
+            "model_pending": True,
+            "motivo":        "Modelo ONT en entrenamiento. Validacion de etiquetas delegada a Elio Vision.",
+            "confianza_minima": req.confianza,
+            "detecciones":   []
+        })
+
+    model       = get_model("ont")
+    image       = decode_image(req.image_base64)
+    det, clases = run_detection(model, image, req.confianza)
+    aprobada    = len(det) > 0
+    return JSONResponse({
+        "aprobada":      aprobada,
+        "total":         len(det),
+        "clases":        clases,
+        "model_pending": False,
+        "motivo":        f"ONT detectado: {', '.join(clases)}" if aprobada else "No se detecto el equipo ONT en la foto.",
+        "confianza_minima": req.confianza,
+        "detecciones":   det
     })
