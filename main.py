@@ -126,12 +126,11 @@ class VentiladorRequest(BaseModel):
     confianza:     float = 0.20
 
 
-# ── Startup: descarga de archivos + carga en memoria de modelos criticos ─────
-# Estrategia de dos fases para evitar OOM en Render free tier (512MB):
-#   Fase 1 - Descargar: baja todos los .pt al disco (sin cargar en RAM)
-#   Fase 2 - Cargar:    solo carga en memoria los modelos mas usados
-
-MODELOS_CARGAR_EN_MEMORIA = ["safe_city", "fo_nodo", "manguera", "cable", "roseta"]
+# ── Startup: solo descarga .pt al disco, cero carga en RAM ───────────────────
+# Render free tier tiene 512MB RAM. Cargar modelos YOLO al startup causa OOM.
+# Estrategia: descargar todos los .pt al disco en background (sin cargar en RAM).
+# Los modelos se cargan en RAM de forma lazy al primer request (desde disco, ~1s).
+# Si el .pt aun no esta en disco -> ModelNotReadyError -> HTTP 200 aprobada:false.
 
 def _descargar_modelo(name: str):
     """Solo descarga el .pt al disco si no existe. No carga en memoria."""
@@ -156,26 +155,11 @@ def _descargar_modelo(name: str):
         print(f"[DESCARGA] {name}: error - {e}")
 
 def _warmup_startup():
-    """
-    Fase 1: descarga en background todos los .pt que no esten en disco.
-    Fase 2: carga en memoria solo los modelos criticos.
-    Los demas se cargan en el primer request pero desde disco (rapido, sin descarga).
-    """
-    # Fase 1: descargar todos
-    print("[STARTUP] Fase 1 - Descargando modelos al disco...")
+    """Descarga todos los .pt al disco en background. Cero carga en RAM."""
+    print("[STARTUP] Descargando modelos al disco (sin cargar en RAM)...")
     for name in MODELS_CONFIG:
         _descargar_modelo(name)
-    print("[STARTUP] Fase 1 completa.")
-
-    # Fase 2: cargar en memoria solo los criticos
-    print("[STARTUP] Fase 2 - Cargando modelos criticos en memoria...")
-    for name in MODELOS_CARGAR_EN_MEMORIA:
-        try:
-            get_model(name)
-            print(f"[STARTUP] {name} en memoria.")
-        except Exception as e:
-            print(f"[STARTUP] Error cargando {name}: {e}")
-    print("[STARTUP] Fase 2 completa.")
+    print("[STARTUP] Descarga completa. Modelos se cargan en RAM al primer uso.")
 
 @app.on_event("startup")
 async def startup_event():
