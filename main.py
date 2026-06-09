@@ -32,6 +32,7 @@ MODELS_CONFIG = {
     "bateria":          {"drive_id": "1qVAzSbjMsYGj2mMRfi41jWB0hW1r8ItU", "path": "models/bateria.pt",          "conf": 0.20},
     "breaker_supresor": {"drive_id": "1sh-LQ6s8JPzbWU2uYfxEiFTCbZyB9kCZ",  "path": "models/breaker_supresor.pt",  "conf": 0.20},
     "ont":              {"drive_id": "1nZ_S9Q_N667gKbFybUfIUDX38ffvD3pe",    "path": "models/ont.pt",               "conf": 0.20},
+    "adaptador":        {"drive_id": "14uqPMbpYOzwK8aGtlvO7q-AYUXYLsv6S",    "path": "models/adaptador.pt",         "conf": 0.20},
 }
 
 _models: dict = {}
@@ -189,6 +190,7 @@ def health(request: Request):
             "POST /bateria/detectar",
             "POST /breaker-supresor/detectar",
             "POST /ont/detectar",
+            "POST /adaptador/detectar",
         ],
         "modelos_cargados": list(_models.keys()),
         "modelos_pendientes": pendientes
@@ -584,4 +586,31 @@ async def detectar_ont(req: DetectarRequest):
         "motivo":        f"ONT detectado: {', '.join(clases)}" if aprobada else "No se detecto el equipo ONT en la foto.",
         "confianza_minima": req.confianza,
         "detecciones":   det
+    })
+
+
+# ── Adaptador Tomacorriente 6 Salidas ────────────────────────────────────────
+
+@app.post("/adaptador/detectar")
+async def detectar_adaptador(req: DetectarRequest):
+    try:
+        model       = get_model("adaptador")
+        image       = decode_image(req.image_base64)
+        det, clases = run_detection(model, image, req.confianza)
+    except ModelNotReadyError:
+        return _respuesta_modelo_no_listo("adaptador")
+    except ValueError as e:
+        return JSONResponse({"error": str(e)}, status_code=422)
+    except RuntimeError as e:
+        return JSONResponse({"error": str(e)}, status_code=503)
+    except Exception as e:
+        return JSONResponse({"error": f"Error inesperado: {e}"}, status_code=500)
+    aprobada = len(det) > 0
+    return JSONResponse({
+        "aprobada":         aprobada,
+        "total":            len(det),
+        "clases":           clases,
+        "motivo":           f"Adaptador tomacorriente detectado: {', '.join(clases)}" if aprobada else "No se detecto el adaptador tomacorriente 6 salidas.",
+        "confianza_minima": req.confianza,
+        "detecciones":      det
     })
