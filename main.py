@@ -119,30 +119,62 @@ class VentiladorRequest(BaseModel):
     confianza:     float = 0.20
 
 
-# ── Startup: pre-calentamiento de modelos criticos ───────────────────────────
+# ── Startup: descarga de archivos + carga en memoria de modelos criticos ─────
+# Estrategia de dos fases para evitar OOM en Render free tier (512MB):
+#   Fase 1 - Descargar: baja todos los .pt al disco (sin cargar en RAM)
+#   Fase 2 - Cargar:    solo carga en memoria los modelos mas usados
 
-MODELOS_WARMUP = [
-    "safe_city", "fo_nodo", "manguera", "cable", "roseta",
-    "ups", "bateria", "breaker_supresor",
-    "ventilador_1", "ventilador_2", "ventilador_3", "ventilador_4",
-    "ont"
-]
+MODELOS_CARGAR_EN_MEMORIA = ["safe_city", "fo_nodo", "manguera", "cable", "roseta"]
 
-def _warmup_models():
-    """Descarga y carga los modelos criticos en background al iniciar."""
-    for name in MODELOS_WARMUP:
+def _descargar_modelo(name: str):
+    """Solo descarga el .pt al disco si no existe. No carga en memoria."""
+    cfg  = MODELS_CONFIG.get(name, {})
+    path = cfg.get("path", "")
+    if not path or os.path.exists(path):
+        return
+    try:
+        print(f"[DESCARGA] {name}...")
+        gdown.download(
+            f"https://drive.google.com/uc?id={cfg['drive_id']}",
+            path, quiet=True
+        )
+        if not os.path.exists(path) or os.path.getsize(path) < 1024:
+            os.remove(path) if os.path.exists(path) else None
+            print(f"[DESCARGA] {name}: descarga incompleta, se reintentara al primer uso.")
+        else:
+            print(f"[DESCARGA] {name}: OK ({round(os.path.getsize(path)/1024/1024,1)} MB)")
+    except Exception as e:
+        if os.path.exists(path):
+            os.remove(path)
+        print(f"[DESCARGA] {name}: error - {e}")
+
+def _warmup_startup():
+    """
+    Fase 1: descarga en background todos los .pt que no esten en disco.
+    Fase 2: carga en memoria solo los modelos criticos.
+    Los demas se cargan en el primer request pero desde disco (rapido, sin descarga).
+    """
+    # Fase 1: descargar todos
+    print("[STARTUP] Fase 1 - Descargando modelos al disco...")
+    for name in MODELS_CONFIG:
+        _descargar_modelo(name)
+    print("[STARTUP] Fase 1 completa.")
+
+    # Fase 2: cargar en memoria solo los criticos
+    print("[STARTUP] Fase 2 - Cargando modelos criticos en memoria...")
+    for name in MODELOS_CARGAR_EN_MEMORIA:
         try:
-            print(f"[WARMUP] Cargando modelo: {name}")
             get_model(name)
-            print(f"[WARMUP] {name} listo.")
+            print(f"[STARTUP] {name} en memoria.")
         except Exception as e:
-            print(f"[WARMUP] Error cargando {name}: {e}")
+            print(f"[STARTUP] Error cargando {name}: {e}")
+    print("[STARTUP] Fase 2 completa.")
 
 @app.on_event("startup")
 async def startup_event():
     loop = asyncio.get_event_loop()
-    loop.run_in_executor(None, _warmup_models)
-    print("[STARTUP] Pre-calentamiento de modelos iniciado en background.")
+    loop.run_in_executor(None, _warmup_startup)
+    print("[STARTUP] Warmup iniciado en background.")
 
 
 # ── Health ────────────────────────────────────────────────────────────────────
