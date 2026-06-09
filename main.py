@@ -121,7 +121,12 @@ class VentiladorRequest(BaseModel):
 
 # ── Startup: pre-calentamiento de modelos criticos ───────────────────────────
 
-MODELOS_WARMUP = ["safe_city", "fo_nodo", "manguera", "cable", "roseta"]
+MODELOS_WARMUP = [
+    "safe_city", "fo_nodo", "manguera", "cable", "roseta",
+    "ups", "bateria", "breaker_supresor",
+    "ventilador_1", "ventilador_2", "ventilador_3", "ventilador_4",
+    "ont"
+]
 
 def _warmup_models():
     """Descarga y carga los modelos criticos en background al iniciar."""
