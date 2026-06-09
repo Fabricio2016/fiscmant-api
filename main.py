@@ -4,7 +4,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from ultralytics import YOLO
 from PIL import Image
-import gdown, io, os, base64, threading
+import gdown, io, os, base64, threading, asyncio
 
 app = FastAPI(title="FiscMant - API Unificada YOLO")
 
@@ -50,23 +50,39 @@ def get_model(name: str) -> YOLO:
                 cfg  = MODELS_CONFIG[name]
                 path = cfg["path"]
                 if not os.path.exists(path):
-                    print(f"[{name}] Descargando modelo...")
-                    gdown.download(
-                        f"https://drive.google.com/uc?id={cfg['drive_id']}",
-                        path, quiet=False
-                    )
-                    print(f"[{name}] Descarga completa.")
-                m = YOLO(path)
-                m.overrides['imgsz']  = 640
-                m.overrides['conf']   = cfg["conf"]
-                m.overrides['device'] = 'cpu'
-                _models[name] = m
-                print(f"[{name}] Modelo listo. Clases: {m.names}")
+                    print(f"[{name}] Descargando modelo desde Google Drive...")
+                    try:
+                        gdown.download(
+                            f"https://drive.google.com/uc?id={cfg['drive_id']}",
+                            path, quiet=False
+                        )
+                        if not os.path.exists(path) or os.path.getsize(path) < 1024:
+                            raise RuntimeError(f"Descarga incompleta o vacia para {name}")
+                        print(f"[{name}] Descarga completa.")
+                    except Exception as e:
+                        if os.path.exists(path):
+                            os.remove(path)
+                        raise RuntimeError(f"Error descargando modelo {name}: {e}")
+                try:
+                    m = YOLO(path)
+                    m.overrides['imgsz']  = 640
+                    m.overrides['conf']   = cfg["conf"]
+                    m.overrides['device'] = 'cpu'
+                    _models[name] = m
+                    print(f"[{name}] Modelo listo. Clases: {m.names}")
+                except Exception as e:
+                    if os.path.exists(path):
+                        os.remove(path)
+                    raise RuntimeError(f"Error cargando modelo {name}: {e}")
     return _models[name]
 
 
 def decode_image(image_base64: str) -> Image.Image:
-    return Image.open(io.BytesIO(base64.b64decode(image_base64))).convert("RGB").resize((640, 640))
+    try:
+        data = base64.b64decode(image_base64)
+        return Image.open(io.BytesIO(data)).convert("RGB").resize((640, 640))
+    except Exception as e:
+        raise ValueError(f"Imagen invalida o base64 corrupto: {e}")
 
 
 def run_detection(model: YOLO, image: Image.Image, conf_threshold: float):
@@ -103,15 +119,37 @@ class VentiladorRequest(BaseModel):
     confianza:     float = 0.20
 
 
+# ── Startup: pre-calentamiento de modelos criticos ───────────────────────────
+
+MODELOS_WARMUP = ["safe_city", "fo_nodo", "manguera", "cable", "roseta"]
+
+def _warmup_models():
+    """Descarga y carga los modelos criticos en background al iniciar."""
+    for name in MODELOS_WARMUP:
+        try:
+            print(f"[WARMUP] Cargando modelo: {name}")
+            get_model(name)
+            print(f"[WARMUP] {name} listo.")
+        except Exception as e:
+            print(f"[WARMUP] Error cargando {name}: {e}")
+
+@app.on_event("startup")
+async def startup_event():
+    loop = asyncio.get_event_loop()
+    loop.run_in_executor(None, _warmup_models)
+    print("[STARTUP] Pre-calentamiento de modelos iniciado en background.")
+
+
 # ── Health ────────────────────────────────────────────────────────────────────
 
 @app.api_route("/", methods=["GET", "HEAD"])
 def health(request: Request):
     if request.method == "HEAD":
         return Response(status_code=200)
+    pendientes = [k for k in MODELS_CONFIG if k not in _models]
     return JSONResponse({
-        "status":   "ok",
-        "servicio": "FiscMant API Unificada",
+        "status":           "ok",
+        "servicio":         "FiscMant API Unificada",
         "endpoints": [
             "POST /nodo-safe-city-cerrado/detectar",
             "POST /fo-nodo/detectar",
@@ -124,7 +162,8 @@ def health(request: Request):
             "POST /breaker-supresor/detectar",
             "POST /ont/detectar",
         ],
-        "modelos_cargados": list(_models.keys())
+        "modelos_cargados": list(_models.keys()),
+        "modelos_pendientes": pendientes
     })
 
 
@@ -132,9 +171,20 @@ def health(request: Request):
 
 @app.post("/nodo-safe-city-cerrado/detectar")
 async def detectar_safe_city(req: DetectarRequest):
-    model   = get_model("safe_city")
-    image   = decode_image(req.image_base64)
-    results = model(image, imgsz=640, verbose=False)
+    try:
+        model   = get_model("safe_city")
+        image   = decode_image(req.image_base64)
+    except ValueError as e:
+        return JSONResponse({"error": str(e)}, status_code=422)
+    except RuntimeError as e:
+        return JSONResponse({"error": str(e)}, status_code=503)
+    except Exception as e:
+        return JSONResponse({"error": f"Error inesperado: {e}"}, status_code=500)
+
+    try:
+        results = model(image, imgsz=640, verbose=False)
+    except Exception as e:
+        return JSONResponse({"error": f"Error en inferencia YOLO: {e}"}, status_code=500)
 
     CLASS_NAMES     = {0: "ETIQUETA", 1: "GABINET"}
     gabinete_valido = False
@@ -210,9 +260,16 @@ async def detectar_safe_city(req: DetectarRequest):
 
 @app.post("/fo-nodo/detectar")
 async def detectar_fo_nodo(req: DetectarRequest):
-    model       = get_model("fo_nodo")
-    image       = decode_image(req.image_base64)
-    det, clases = run_detection(model, image, req.confianza)
+    try:
+        model       = get_model("fo_nodo")
+        image       = decode_image(req.image_base64)
+        det, clases = run_detection(model, image, req.confianza)
+    except ValueError as e:
+        return JSONResponse({"error": str(e)}, status_code=422)
+    except RuntimeError as e:
+        return JSONResponse({"error": str(e)}, status_code=503)
+    except Exception as e:
+        return JSONResponse({"error": f"Error inesperado: {e}"}, status_code=500)
     aprobada    = len(det) > 0
     return JSONResponse({
         "aprobada":         aprobada,
@@ -228,9 +285,16 @@ async def detectar_fo_nodo(req: DetectarRequest):
 
 @app.post("/manguera/detectar")
 async def detectar_manguera(req: DetectarRequest):
-    model       = get_model("manguera")
-    image       = decode_image(req.image_base64)
-    det, clases = run_detection(model, image, req.confianza)
+    try:
+        model       = get_model("manguera")
+        image       = decode_image(req.image_base64)
+        det, clases = run_detection(model, image, req.confianza)
+    except ValueError as e:
+        return JSONResponse({"error": str(e)}, status_code=422)
+    except RuntimeError as e:
+        return JSONResponse({"error": str(e)}, status_code=503)
+    except Exception as e:
+        return JSONResponse({"error": f"Error inesperado: {e}"}, status_code=500)
     aprobada    = len(det) > 0
     return JSONResponse({
         "aprobada":         aprobada,
@@ -246,9 +310,16 @@ async def detectar_manguera(req: DetectarRequest):
 
 @app.post("/cable/detectar")
 async def detectar_cable(req: DetectarRequest):
-    model       = get_model("cable")
-    image       = decode_image(req.image_base64)
-    det, clases = run_detection(model, image, req.confianza)
+    try:
+        model       = get_model("cable")
+        image       = decode_image(req.image_base64)
+        det, clases = run_detection(model, image, req.confianza)
+    except ValueError as e:
+        return JSONResponse({"error": str(e)}, status_code=422)
+    except RuntimeError as e:
+        return JSONResponse({"error": str(e)}, status_code=503)
+    except Exception as e:
+        return JSONResponse({"error": f"Error inesperado: {e}"}, status_code=500)
     aprobada    = len(det) > 0
     return JSONResponse({
         "aprobada":         aprobada,
@@ -264,9 +335,16 @@ async def detectar_cable(req: DetectarRequest):
 
 @app.post("/roseta/detectar")
 async def detectar_roseta(req: DetectarRequest):
-    model       = get_model("roseta")
-    image       = decode_image(req.image_base64)
-    det, clases = run_detection(model, image, req.confianza)
+    try:
+        model       = get_model("roseta")
+        image       = decode_image(req.image_base64)
+        det, clases = run_detection(model, image, req.confianza)
+    except ValueError as e:
+        return JSONResponse({"error": str(e)}, status_code=422)
+    except RuntimeError as e:
+        return JSONResponse({"error": str(e)}, status_code=503)
+    except Exception as e:
+        return JSONResponse({"error": f"Error inesperado: {e}"}, status_code=500)
     aprobada    = len(det) > 0
 
     partes = []
@@ -296,11 +374,18 @@ VENTILADORES_LABELS = {
 async def detectar_ventilador(req: VentiladorRequest):
     if req.ventilador_id not in VENTILADORES_LABELS:
         return JSONResponse({"error": "ventilador_id debe ser 1, 2, 3 o 4"}, status_code=400)
-
-    model       = get_model(f"ventilador_{req.ventilador_id}")
-    label       = VENTILADORES_LABELS[req.ventilador_id]
-    image       = decode_image(req.image_base64)
-    det, clases = run_detection(model, image, req.confianza)
+    try:
+        model       = get_model(f"ventilador_{req.ventilador_id}")
+        label       = VENTILADORES_LABELS[req.ventilador_id]
+        image       = decode_image(req.image_base64)
+        det, clases = run_detection(model, image, req.confianza)
+    except ValueError as e:
+        return JSONResponse({"error": str(e)}, status_code=422)
+    except RuntimeError as e:
+        return JSONResponse({"error": str(e)}, status_code=503)
+    except Exception as e:
+        return JSONResponse({"error": f"Error inesperado: {e}"}, status_code=500)
+    label = VENTILADORES_LABELS[req.ventilador_id]
     aprobada    = len(det) > 0
 
     return JSONResponse({
@@ -319,9 +404,16 @@ async def detectar_ventilador(req: VentiladorRequest):
 
 @app.post("/ups/detectar")
 async def detectar_ups(req: DetectarRequest):
-    model       = get_model("ups")
-    image       = decode_image(req.image_base64)
-    det, clases = run_detection(model, image, req.confianza)
+    try:
+        model       = get_model("ups")
+        image       = decode_image(req.image_base64)
+        det, clases = run_detection(model, image, req.confianza)
+    except ValueError as e:
+        return JSONResponse({"error": str(e)}, status_code=422)
+    except RuntimeError as e:
+        return JSONResponse({"error": str(e)}, status_code=503)
+    except Exception as e:
+        return JSONResponse({"error": f"Error inesperado: {e}"}, status_code=500)
     aprobada    = len(det) > 0
     return JSONResponse({
         "aprobada":         aprobada,
@@ -337,9 +429,16 @@ async def detectar_ups(req: DetectarRequest):
 
 @app.post("/bateria/detectar")
 async def detectar_bateria(req: DetectarRequest):
-    model       = get_model("bateria")
-    image       = decode_image(req.image_base64)
-    det, clases = run_detection(model, image, req.confianza)
+    try:
+        model       = get_model("bateria")
+        image       = decode_image(req.image_base64)
+        det, clases = run_detection(model, image, req.confianza)
+    except ValueError as e:
+        return JSONResponse({"error": str(e)}, status_code=422)
+    except RuntimeError as e:
+        return JSONResponse({"error": str(e)}, status_code=503)
+    except Exception as e:
+        return JSONResponse({"error": f"Error inesperado: {e}"}, status_code=500)
     aprobada    = len(det) > 0
     return JSONResponse({
         "aprobada":         aprobada,
@@ -357,9 +456,16 @@ ETIQUETAS_VALIDAS_BREAKER = {"fase", "neutro", "puente"}
 
 @app.post("/breaker-supresor/detectar")
 async def detectar_breaker_supresor(req: DetectarRequest):
-    model       = get_model("breaker_supresor")
-    image       = decode_image(req.image_base64)
-    det, clases = run_detection(model, image, req.confianza)
+    try:
+        model       = get_model("breaker_supresor")
+        image       = decode_image(req.image_base64)
+        det, clases = run_detection(model, image, req.confianza)
+    except ValueError as e:
+        return JSONResponse({"error": str(e)}, status_code=422)
+    except RuntimeError as e:
+        return JSONResponse({"error": str(e)}, status_code=503)
+    except Exception as e:
+        return JSONResponse({"error": f"Error inesperado: {e}"}, status_code=500)
 
     breaker_dets      = [d for d in det if "breaker"  in d["clase"].lower()]
     supresor_dets     = [d for d in det if "supresor" in d["clase"].lower()]
@@ -411,10 +517,16 @@ async def detectar_ont(req: DetectarRequest):
             "confianza_minima": req.confianza,
             "detecciones":   []
         })
-
-    model       = get_model("ont")
-    image       = decode_image(req.image_base64)
-    det, clases = run_detection(model, image, req.confianza)
+    try:
+        model       = get_model("ont")
+        image       = decode_image(req.image_base64)
+        det, clases = run_detection(model, image, req.confianza)
+    except ValueError as e:
+        return JSONResponse({"error": str(e)}, status_code=422)
+    except RuntimeError as e:
+        return JSONResponse({"error": str(e)}, status_code=503)
+    except Exception as e:
+        return JSONResponse({"error": f"Error inesperado: {e}"}, status_code=500)
     aprobada    = len(det) > 0
     return JSONResponse({
         "aprobada":      aprobada,
