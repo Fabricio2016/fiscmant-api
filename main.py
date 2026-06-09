@@ -42,28 +42,23 @@ def _model_ready(name: str) -> bool:
     return MODELS_CONFIG.get(name, {}).get("drive_id", "PENDING_TRAINING") != "PENDING_TRAINING"
 
 
+class ModelNotReadyError(Exception):
+    """El archivo .pt aun no esta en disco (descargandose en background)."""
+    pass
+
 def get_model(name: str) -> YOLO:
-    """Carga el modelo solo la primera vez que se solicita (lazy loading)."""
+    """Carga el modelo desde disco. NO descarga — las descargas son solo via _descargar_modelo."""
     if name not in _models:
         with _locks[name]:
             if name not in _models:
                 cfg  = MODELS_CONFIG[name]
                 path = cfg["path"]
                 if not os.path.exists(path):
-                    print(f"[{name}] Descargando modelo desde Google Drive...")
-                    try:
-                        gdown.download(
-                            f"https://drive.google.com/uc?id={cfg['drive_id']}",
-                            path, quiet=False
-                        )
-                        if not os.path.exists(path) or os.path.getsize(path) < 1024:
-                            raise RuntimeError(f"Descarga incompleta o vacia para {name}")
-                        print(f"[{name}] Descarga completa.")
-                    except Exception as e:
-                        if os.path.exists(path):
-                            os.remove(path)
-                        raise RuntimeError(f"Error descargando modelo {name}: {e}")
+                    raise ModelNotReadyError(
+                        f"Modelo {name} aun descargandose. Reintenta en 30 segundos."
+                    )
                 try:
+                    print(f"[{name}] Cargando desde disco...")
                     m = YOLO(path)
                     m.overrides['imgsz']  = 640
                     m.overrides['conf']   = cfg["conf"]
@@ -76,6 +71,18 @@ def get_model(name: str) -> YOLO:
                     raise RuntimeError(f"Error cargando modelo {name}: {e}")
     return _models[name]
 
+
+def _respuesta_modelo_no_listo(name: str) -> JSONResponse:
+    """Respuesta inmediata HTTP 200 cuando el modelo aun se esta descargando."""
+    return JSONResponse({
+        "aprobada":      False,
+        "nodo_valido":   False,
+        "model_loading": True,
+        "motivo":        f"Sistema inicializando modelo '{name}'. Reintenta en 30 segundos.",
+        "total":         0,
+        "clases":        [],
+        "detecciones":   []
+    })
 
 def decode_image(image_base64: str) -> Image.Image:
     try:
@@ -211,6 +218,8 @@ async def detectar_safe_city(req: DetectarRequest):
     try:
         model   = get_model("safe_city")
         image   = decode_image(req.image_base64)
+    except ModelNotReadyError:
+        return _respuesta_modelo_no_listo("safe_city")
     except ValueError as e:
         return JSONResponse({"error": str(e)}, status_code=422)
     except RuntimeError as e:
@@ -301,6 +310,8 @@ async def detectar_fo_nodo(req: DetectarRequest):
         model       = get_model("fo_nodo")
         image       = decode_image(req.image_base64)
         det, clases = run_detection(model, image, req.confianza)
+    except ModelNotReadyError:
+        return _respuesta_modelo_no_listo("fo_nodo")
     except ValueError as e:
         return JSONResponse({"error": str(e)}, status_code=422)
     except RuntimeError as e:
@@ -326,6 +337,8 @@ async def detectar_manguera(req: DetectarRequest):
         model       = get_model("manguera")
         image       = decode_image(req.image_base64)
         det, clases = run_detection(model, image, req.confianza)
+    except ModelNotReadyError:
+        return _respuesta_modelo_no_listo("manguera")
     except ValueError as e:
         return JSONResponse({"error": str(e)}, status_code=422)
     except RuntimeError as e:
@@ -351,6 +364,8 @@ async def detectar_cable(req: DetectarRequest):
         model       = get_model("cable")
         image       = decode_image(req.image_base64)
         det, clases = run_detection(model, image, req.confianza)
+    except ModelNotReadyError:
+        return _respuesta_modelo_no_listo("cable")
     except ValueError as e:
         return JSONResponse({"error": str(e)}, status_code=422)
     except RuntimeError as e:
@@ -376,6 +391,8 @@ async def detectar_roseta(req: DetectarRequest):
         model       = get_model("roseta")
         image       = decode_image(req.image_base64)
         det, clases = run_detection(model, image, req.confianza)
+    except ModelNotReadyError:
+        return _respuesta_modelo_no_listo("roseta")
     except ValueError as e:
         return JSONResponse({"error": str(e)}, status_code=422)
     except RuntimeError as e:
@@ -416,6 +433,8 @@ async def detectar_ventilador(req: VentiladorRequest):
         label       = VENTILADORES_LABELS[req.ventilador_id]
         image       = decode_image(req.image_base64)
         det, clases = run_detection(model, image, req.confianza)
+    except ModelNotReadyError:
+        return _respuesta_modelo_no_listo(f"ventilador_{req.ventilador_id}")
     except ValueError as e:
         return JSONResponse({"error": str(e)}, status_code=422)
     except RuntimeError as e:
@@ -445,6 +464,8 @@ async def detectar_ups(req: DetectarRequest):
         model       = get_model("ups")
         image       = decode_image(req.image_base64)
         det, clases = run_detection(model, image, req.confianza)
+    except ModelNotReadyError:
+        return _respuesta_modelo_no_listo("ups")
     except ValueError as e:
         return JSONResponse({"error": str(e)}, status_code=422)
     except RuntimeError as e:
@@ -470,6 +491,8 @@ async def detectar_bateria(req: DetectarRequest):
         model       = get_model("bateria")
         image       = decode_image(req.image_base64)
         det, clases = run_detection(model, image, req.confianza)
+    except ModelNotReadyError:
+        return _respuesta_modelo_no_listo("bateria")
     except ValueError as e:
         return JSONResponse({"error": str(e)}, status_code=422)
     except RuntimeError as e:
@@ -497,6 +520,8 @@ async def detectar_breaker_supresor(req: DetectarRequest):
         model       = get_model("breaker_supresor")
         image       = decode_image(req.image_base64)
         det, clases = run_detection(model, image, req.confianza)
+    except ModelNotReadyError:
+        return _respuesta_modelo_no_listo("breaker_supresor")
     except ValueError as e:
         return JSONResponse({"error": str(e)}, status_code=422)
     except RuntimeError as e:
@@ -558,6 +583,8 @@ async def detectar_ont(req: DetectarRequest):
         model       = get_model("ont")
         image       = decode_image(req.image_base64)
         det, clases = run_detection(model, image, req.confianza)
+    except ModelNotReadyError:
+        return _respuesta_modelo_no_listo("ont")
     except ValueError as e:
         return JSONResponse({"error": str(e)}, status_code=422)
     except RuntimeError as e:
